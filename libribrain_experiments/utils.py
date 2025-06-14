@@ -239,7 +239,7 @@ def run_training(train_loader, val_loader, config, n_classes, best_model_metric=
     return trainer, best_module, module
 
 
-def run_validation(val_loader, module, labels, samples_per_class=None):
+def run_validation(val_loader, module, labels, avg_evals=None, samples_per_class=None):
     disp_labels = labels
     module.eval()
     all_preds = []
