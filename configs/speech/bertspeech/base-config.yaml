@@ -1,0 +1,63 @@
+data:
+  datasets:
+    train:
+      - libribrain_speech_simplified:
+          data_path: '<DATA_PATH>'
+          preprocessing_str: 'bads+headpos+sss+notch+bp+ds'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          exclude_run_keys: [['0', '11', 'Sherlock1', '2'], ['0', '12', 'Sherlock1', '2']]
+          preload_files: false
+
+    val:
+      - libribrain_speech_simplified:
+          data_path: '<DATA_PATH>'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          include_run_keys: [['0', '11', 'Sherlock1', '2']]
+          preload_files: false
+    test:
+      - libribrain_speech_simplified:
+          data_path: '<DATA_PATH>'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          include_run_keys: [['0', '12', 'Sherlock1', '2']]
+          preload_files: false
+  dataloader:
+    batch_size: 256
+    num_workers: 4
+  general:
+    inMemory: False
+
+
+model:
+  - bertspeech:
+      input_dim: 306       # number of sensors entering the network
+      seq_len: 125         # length of window (samples)
+      num_classes: 2       # 2 for speech-vs-silence
+      hidden_size: 1024    # you may down-size for GPU memory
+      emb_size: 256
+      factor_size: 64
+      num_heads: 4
+      num_layers: 2
+
+loss:
+  name: cross_entropy
+
+
+optimizer:
+  name: adam
+  config:
+    lr: 1e-4
+
+trainer:
+  max_epochs: 10
+
+general:
+  wandb: True
+  output_path: '<RESULTS_PATH>/final-speech-results'
+  checkpoint_path: '<CHECKPOINTS_PATH>/final-speech-results'
+  seed: 42
