@@ -3,14 +3,7 @@ from transformers import BertModel, BertConfig
 
 
 class BertSpeech(nn.Module):
-    """Model based in DyslexNet, implementation simplified using BERT from HF.
-
-    Each time-step is projected to `emb_size` and then to the *factorised*
-    dimension `factor_size` before reaching the full Transformer hidden size.
-    All encoder layers **share parameters** (like ALBERT) to keep the model
-    small enough for the dataset.
-
-    - Paper: https://sciencedirect.com/science/article/pii/S1053811923002185
+    """A small BERT model.
 
     Parameters
     ----------
