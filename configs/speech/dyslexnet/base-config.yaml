@@ -9,7 +9,7 @@ data:
           tmax: 0.5
           exclude_run_keys: [['0', '11', 'Sherlock1', '2'], ['0', '12', 'Sherlock1', '2']]
           preload_files: false
-          
+
     val:
       - libribrain_speech_simplified:
           data_path: '<DATA_PATH>'
@@ -26,7 +26,7 @@ data:
           tmax: 0.5
           include_run_keys: [['0', '12', 'Sherlock1', '2']]
           preload_files: false
-  dataloader: 
+  dataloader:
     batch_size: 256
     num_workers: 4
   general:
@@ -34,66 +34,25 @@ data:
 
 
 model:
-  - conv1d:
-      in_channels: 306
-      out_channels: 128
-      kernel_size: 7
-      stride: 1
-      padding: 'same'
-  - resnet_block:
-      model_config:
-        - elu:
-        - conv1d:
-            in_channels: 128
-            out_channels: 128
-            kernel_size: 3
-            stride: 1
-            padding: 'same'
-        - elu:
-        - conv1d:
-            in_channels: 128
-            out_channels: 128
-            kernel_size: 1
-            stride: 1
-            padding: 'same'
-  - elu:
-  - conv1d:
-      in_channels: 128
-      out_channels: 128
-      kernel_size: 50
-      stride: 25
-  - elu:
-  - conv1d:
-      in_channels: 128
-      out_channels: 128
-      kernel_size: 7
-      stride: 1
-      padding: 'same'
-  - elu:
-  - conv1d:
-      in_channels: 128
-      out_channels: 512
-      kernel_size: 4
-      padding: 0
-  - relu:
-  - dropout:
-      p: 0.5
-  - conv1d:
-      in_channels: 512
-      out_channels: 2
-      kernel_size: 1
-      padding: 0
-  - flatten:
+  - dyslexnet:
+      input_dim: 306       # number of sensors entering the network
+      seq_len: 125         # length of window (samples)
+      num_classes: 2       # 2 for speech-vs-silence
+      hidden_size: 1024    # you may down-size for GPU memory
+      emb_size: 256
+      factor_size: 64
+      num_heads: 4
+      num_layers: 2
 
 loss:
   name: cross_entropy
-  
-  
+
+
 optimizer:
   name: adam
   config:
-    lr: 0.0003
-    
+    lr: 1e-4
+
 trainer:
   max_epochs: 10
 

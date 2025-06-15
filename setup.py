@@ -20,5 +20,6 @@ setup(
         'matplotlib',
         'h5py',
         'mne-bids',
+        'transformers',
     ],
 )
