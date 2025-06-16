@@ -10,9 +10,10 @@ $ libribrain_experiments/aggregate_metrics.py \
 
 import argparse
 import json
-import statistics as stats
 import sys
 from pathlib import Path
+
+import numpy as np
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,7 +44,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--metric",
         "-m",
-        default="val_f1_macro",
+        nargs="+",
+        default=[
+            "val_f1_macro",
+            "val_f1_micro",
+            "val_bal_acc",
+            "val_rocauc_macro",
+            "val_jaccard_index",
+            "val_loss",
+        ],
         help="Key to extract from each JSON file (default: %(default)s).",
     )
     return p.parse_args()
@@ -66,36 +75,39 @@ def main() -> None:
     values = []
     missing = []
 
-    for fp in args.files:
-        try:
-            with fp.open() as f:
-                data = json.load(f)
-            values.append(float(data[args.metric]))
-        except FileNotFoundError:
-            print(f"[WARN] file not found: {fp}", file=sys.stderr)
-        except KeyError:
-            missing.append(fp)
-        except Exception as ex:  # catch malformed JSON, etc.
-            print(f"[WARN] could not read {fp}: {ex}", file=sys.stderr)
+    for metric in args.metric:
+        for fp in args.files:
+            try:
+                with fp.open() as f:
+                    data = json.load(f)
+                values.append(float(data[metric]))
+            except FileNotFoundError:
+                print(f"[WARN] file not found: {fp}", file=sys.stderr)
+            except KeyError:
+                missing.append(fp)
+            except Exception as ex:  # catch malformed JSON, etc.
+                print(f"[WARN] could not read {fp}: {ex}", file=sys.stderr)
 
-    if missing:
+        if missing:
+            print(
+                f"[WARN] metric '{metric}' not found in "
+                f"{len(missing)} file(s): {[str(p) for p in missing]}",
+                file=sys.stderr,
+            )
+
+        if not values:
+            print(
+                "No metric values collected for '{metric}' - aborting.", file=sys.stderr
+            )
+            break
+
+        mean = np.mean(values)
+        stdev = np.std(values) if len(values) > 1 else 0.0
+
         print(
-            f"[WARN] metric '{args.metric}' not found in "
-            f"{len(missing)} file(s): {[str(p) for p in missing]}",
-            file=sys.stderr,
+            f"{metric}: {mean:.4f} ± {stdev:.4f}  "
+            f"(n={len(values)} from {len(args.files)} file(s))"
         )
-
-    if not values:
-        print("No metric values collected – aborting.", file=sys.stderr)
-        sys.exit(1)
-
-    mean = stats.mean(values)
-    stdev = stats.stdev(values) if len(values) > 1 else 0.0
-
-    print(
-        f"{args.metric}: {mean:.4f} ± {stdev:.4f}  "
-        f"(n={len(values)} from {len(args.files)} file(s))"
-    )
 
 
 if __name__ == "__main__":
