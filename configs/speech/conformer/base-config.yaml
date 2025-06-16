@@ -1,0 +1,79 @@
+data:
+  datasets:
+    train:
+      - libribrain_speech_simplified:
+          data_path: '<DATA_PATH>'
+          preprocessing_str: 'bads+headpos+sss+notch+bp+ds'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          exclude_run_keys: [['0', '11', 'Sherlock1', '2'], ['0', '12', 'Sherlock1', '2']]
+          preload_files: false
+
+    val:
+      - libribrain_speech_simplified:
+          data_path: '<DATA_PATH>'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          include_run_keys: [['0', '11', 'Sherlock1', '2']]
+          preload_files: false
+    test:
+      - libribrain_speech_simplified:
+          data_path: '<DATA_PATH>'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          include_run_keys: [['0', '12', 'Sherlock1', '2']]
+          preload_files: false
+  dataloader:
+    batch_size: 256
+    num_workers: 4
+  general:
+    inMemory: False
+
+
+model:
+  - conformer:
+      # Small
+      # hidden_size: 144        # Encoder Dim (pick 256 or 512 for M/L)
+      # ffn_dim: 576            # 4x hidden_size
+      # num_layers: 16
+      # num_heads: 4
+
+      # Medium
+      hidden_size: 256
+      ffn_dim: 1024
+      num_layers: 16
+      num_heads: 4
+
+      # Large
+      # hidden_size: 512
+      # ffn_dim: 2048
+      # num_layers: 17
+      # num_heads: 8
+
+      # General parameters
+      depthwise_conv_kernel_size: 31
+      seq_len: 125            # length of window (samples)
+      input_dim: 306          # sensors
+      use_preproj: true       # leave on unless hidden_size == 306
+      num_classes: 2          # speech-vs-silence
+
+loss:
+  name: cross_entropy
+
+
+optimizer:
+  name: adam
+  config:
+    lr: 1e-4
+
+trainer:
+  max_epochs: 10
+
+general:
+  wandb: True
+  output_path: '<RESULTS_PATH>/final-speech-results'
+  checkpoint_path: '<CHECKPOINTS_PATH>/final-speech-results'
+  seed: 42

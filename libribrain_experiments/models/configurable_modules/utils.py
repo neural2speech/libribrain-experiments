@@ -8,6 +8,7 @@ from torch.nn import LayerNorm
 from libribrain_experiments.models.average_groups import AverageGroups
 from libribrain_experiments.models.dyslexnet import DyslexNetTransformer
 from libribrain_experiments.models.bertspeech import BertSpeech
+from libribrain_experiments.models.conformer import ConformerSpeech
 
 
 def modules_from_config(modules: list[tuple[str, dict]]):
@@ -51,6 +52,8 @@ def modules_from_config(modules: list[tuple[str, dict]]):
             module = DyslexNetTransformer(**config)
         elif module_type == "bertspeech":
             module = BertSpeech(**config)
+        elif module_type == "conformer":
+            module = ConformerSpeech(**config)
         else:
             raise ValueError(f"Unsupported module_type: {module_type}")
         modules_list.append(module)
