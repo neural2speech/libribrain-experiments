@@ -1,3 +1,4 @@
+import torch
 from torch import nn
 from torchmetrics import Accuracy, Precision, Recall
 from pytorch_lightning import LightningModule
@@ -6,12 +7,20 @@ from .utils import modules_from_config, optimizer_from_config, loss_fn_from_conf
 
 
 class ClassificationModule(LightningModule):
-    def __init__(self, model_config: list[tuple[str, dict]], n_classes: int, optimizer_config: dict, loss_config: dict):
+    def __init__(
+        self, model_config: list[tuple[str, dict]], n_classes: int,
+        optimizer_config: dict, loss_config: dict,
+        single_logit: bool = False,
+
+    ):
         super().__init__()
         self.save_hyperparameters()
+        self.single_logit = single_logit
         self.modules_list = nn.ModuleList()
         self.modules_list.extend(modules_from_config(model_config))
         self.loss_fn = loss_fn_from_config(loss_config)
+        if self.single_logit:  # 1-logit + sigmoid
+            n_classes = 2
         self.accuracy = Accuracy(num_classes=n_classes, task="multiclass")
         self.balanced_accuracy = Accuracy(
             num_classes=n_classes, task="multiclass", average="macro")
@@ -39,20 +48,31 @@ class ClassificationModule(LightningModule):
     def configure_optimizers(self):
         return optimizer_from_config(self.parameters(), self.optimizer_config)
 
+    def _preds_targets(self, y_hat, y):
+        """Return `(preds, target)` in the right format for the metrics."""
+        if self.single_logit:
+            probs = torch.sigmoid(y_hat.flatten())
+            preds = (probs >= 0.5).long()
+            return preds, y.long()
+        else:
+            preds = torch.argmax(y_hat, dim=1)
+            return preds, y
+
     def training_step(self, batch, batch_idx):
         x, y = batch[0], batch[1]
         y_hat = self(x)
         loss = self.loss_fn(y_hat, y)
-        acc = self.accuracy(y_hat, y)
-        f1_micro = self.f1_micro(y_hat, y)
-        f1_macro = self.f1_macro(y_hat, y)
-        bal_acc = self.balanced_accuracy(y_hat, y)
+        preds, tgt = self._preds_targets(y_hat, y)
+        acc = self.accuracy(preds, tgt)
+        f1_micro = self.f1_micro(preds, y)
+        f1_macro = self.f1_macro(preds, y)
+        bal_acc  = self.balanced_accuracy(preds, y)
         self.log('train_loss', loss)
         self.log('train_acc', acc)
         self.log('train_f1_micro', f1_micro)
         self.log('train_f1_macro', f1_macro)
-        self.log('train_precision_micro', self.precision_micro(y_hat, y))
-        self.log('train_precision_macro', self.precision_macro(y_hat, y))
+        self.log('train_precision_micro', self.precision_micro(preds, y))
+        self.log('train_precision_macro', self.precision_macro(preds, y))
         self.log('train_bal_acc', bal_acc)
         for class_idx in range(y_hat.shape[1]):
             y_binary = (y == class_idx).int()
@@ -82,16 +102,17 @@ class ClassificationModule(LightningModule):
         x, y = batch[0], batch[1]
         y_hat = self(x)
         loss = self.loss_fn(y_hat, y)
-        acc = self.accuracy(y_hat, y)
-        f1_micro = self.f1_micro(y_hat, y)
-        f1_macro = self.f1_macro(y_hat, y)
-        bal_acc = self.balanced_accuracy(y_hat, y)
+        preds, tgt = self._preds_targets(y_hat, y)
+        acc = self.accuracy(preds, tgt)
+        f1_micro = self.f1_micro(preds, y)
+        f1_macro = self.f1_macro(preds, y)
+        bal_acc  = self.balanced_accuracy(preds, y)
         self.log('val_loss', loss)
         self.log('val_acc', acc)
         self.log('val_f1_micro', f1_micro)
         self.log('val_f1_macro', f1_macro)
-        self.log('val_precision_micro', self.precision_micro(y_hat, y))
-        self.log('val_precision_macro', self.precision_macro(y_hat, y))
+        self.log('val_precision_micro', self.precision_micro(preds, y))
+        self.log('val_precision_macro', self.precision_macro(preds, y))
         self.log('val_bal_acc', bal_acc)
         for class_idx in range(y_hat.shape[1]):
             y_binary = (y == class_idx).int()
@@ -121,16 +142,17 @@ class ClassificationModule(LightningModule):
         x, y = batch
         y_hat = self(x)
         loss = self.loss_fn(y_hat, y)
-        acc = self.accuracy(y_hat, y)
-        f1_micro = self.f1_micro(y_hat, y)
-        f1_macro = self.f1_macro(y_hat, y)
-        bal_acc = self.balanced_accuracy(y_hat, y)
+        preds, tgt = self._preds_targets(y_hat, y)
+        acc = self.accuracy(preds, tgt)
+        f1_micro = self.f1_micro(preds, y)
+        f1_macro = self.f1_macro(preds, y)
+        bal_acc  = self.balanced_accuracy(preds, y)
         self.log('test_loss', loss)
         self.log('test_acc', acc)
         self.log('test_f1_micro', f1_micro)
         self.log('test_f1_macro', f1_macro)
-        self.log('test_precision_micro', self.precision_micro(y_hat, y))
-        self.log('test_precision_macro', self.precision_macro(y_hat, y))
+        self.log('test_precision_micro', self.precision_micro(preds, y))
+        self.log('test_precision_macro', self.precision_macro(preds, y))
         self.log('test_bal_acc', bal_acc)
         for class_idx in range(y_hat.shape[1]):
             y_binary = (y == class_idx).int()

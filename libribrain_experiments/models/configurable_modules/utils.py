@@ -1,9 +1,11 @@
+import torch
 from torch.nn import Conv1d, ELU
 from torch.nn import Softsign, GRU, Linear, ReLU, Sigmoid, GELU, BatchNorm1d
 from torch import nn
 from torch.optim import Adam, AdamW, SGD
 from torch.optim.lr_scheduler import LinearLR, StepLR, CosineAnnealingLR, CosineAnnealingWarmRestarts
-from libribrain_experiments.models.util_layers import Permute
+from libribrain_experiments.models.util_layers import Permute, LSTMBlock, SelectChannels
+from libribrain_experiments.models.util_losses import BCEWithLogitsLossWithSmoothing
 from torch.nn import LayerNorm
 from libribrain_experiments.models.average_groups import AverageGroups
 from libribrain_experiments.models.dyslexnet import DyslexNetTransformer
@@ -48,6 +50,10 @@ def modules_from_config(modules: list[tuple[str, dict]]):
             module = LayerNorm(**config)
         elif module_type == "average_groups":
             module = AverageGroups(**config)
+        elif module_type == "select_channels":
+            module = SelectChannels(**config)
+        elif module_type == "lstm_block":
+            module = LSTMBlock(**config)
         elif module_type == "dyslexnet":
             module = DyslexNetTransformer(**config)
         elif module_type == "bertspeech":
@@ -103,6 +109,11 @@ def loss_fn_from_config(loss_config):
         if ("config" not in loss_config or loss_config["config"] is None):
             return nn.CrossEntropyLoss()
         return nn.CrossEntropyLoss(**loss_config["config"])
+    elif loss_config["name"] == "bce_with_smoothing":
+        cfg = loss_config.get("config", {})
+        smoothing   = float(cfg.pop("smoothing", .0))
+        pos_weight  = torch.tensor([cfg.pop("pos_weight", 1.0)])
+        return BCEWithLogitsLossWithSmoothing(smoothing, pos_weight, **cfg)
     else:
         raise ValueError(f"Unsupported loss: {loss_config['name']}")
 
