@@ -48,12 +48,20 @@ def parse_args() -> argparse.Namespace:
         default=[
             "val_f1_macro",
             "val_f1_micro",
+            "val_class_1_f1",
             "val_bal_acc",
             "val_rocauc_macro",
+            "val_rocauc_micro",
             "val_jaccard_index",
             "val_loss",
         ],
         help="Key to extract from each JSON file (default: %(default)s).",
+    )
+    p.add_argument(
+        "--suffix",
+        "-s",
+        default=None,
+        help="The suffix to add to the metrics, like '_avg5'."
     )
     return p.parse_args()
 
@@ -72,10 +80,13 @@ def main() -> None:
     """
     args = parse_args()
 
-    values = []
     missing = []
 
     for metric in args.metric:
+        values = []
+
+        if args.suffix is not None:
+            metric += args.suffix
         for fp in args.files:
             try:
                 with fp.open() as f:
