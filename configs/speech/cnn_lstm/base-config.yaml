@@ -1,0 +1,121 @@
+# CNN+LSTM model from the LibriBrain competition notebook.
+data:
+  datasets:
+    train:
+      - libribrain_speech_filtered:
+          data_path: '<DATA_PATH>'
+          preprocessing_str: 'bads+headpos+sss+notch+bp+ds'
+          tmin: 0.0
+          tmax: 0.8
+          include_run_keys:
+            # Sherlock1 sessions 1-10
+            - ['0', '1', 'Sherlock1', '1']
+            - ['0', '2', 'Sherlock1', '1']
+            - ['0', '3', 'Sherlock1', '1']
+            - ['0', '4', 'Sherlock1', '1']
+            - ['0', '5', 'Sherlock1', '1']
+            - ['0', '6', 'Sherlock1', '1']
+            - ['0', '7', 'Sherlock1', '1']
+            - ['0', '8', 'Sherlock1', '1']
+            - ['0', '9', 'Sherlock1', '1']
+            - ['0', '10', 'Sherlock1', '1']
+            # Sherlock2 sessions 1-13 except 2
+            - ['0', '1', 'Sherlock2', '1']
+            # - ['0', '2', 'Sherlock2', '1']
+            - ['0', '3', 'Sherlock2', '1']
+            - ['0', '4', 'Sherlock2', '1']
+            - ['0', '5', 'Sherlock2', '1']
+            - ['0', '6', 'Sherlock2', '1']
+            - ['0', '7', 'Sherlock2', '1']
+            - ['0', '8', 'Sherlock2', '1']
+            - ['0', '9', 'Sherlock2', '1']
+            - ['0', '10', 'Sherlock2', '1']
+            - ['0', '11', 'Sherlock2', '1']
+            - ['0', '12', 'Sherlock2', '1']
+          preload_files: true
+
+    val:
+      - libribrain_speech_filtered:
+          data_path: '<DATA_PATH>'
+          standardize: true
+          use_train_stats: false  # compute val mean/std from val data (notebook)
+          tmin: 0.0
+          tmax: 0.8
+          include_run_keys: [ [ "0", "11", "Sherlock1", "2" ] ]
+          preload_files: true
+
+    test:
+      - libribrain_speech_filtered:
+          data_path: '<DATA_PATH>'
+          standardize: true
+          use_train_stats: false  # compute val mean/std from val data (notebook)
+          tmin: 0.0
+          tmax: 0.8
+          include_run_keys: [ [ "0", "12", "Sherlock1", "2" ] ]
+          preload_files: true
+
+  dataloader:
+    batch_size: 32
+    num_workers: 4
+  general:
+    inMemory: false
+
+# model backbone (CNN -> LSTM -> head)
+model:
+  # `libribrain_speech_filtered` already filters the channels. But we can also
+  # filter them after the generating the tensors if prefered:
+  # - select_channels:
+  #     channels: [18,20,22,23,45,120,138,140,142,143,145,146,147,149,
+  #                175,176,177,179,180,198,271,272,275]  # 23 channels
+
+  - conv1d:
+      in_channels: 23
+      out_channels: 100
+      kernel_size: 3
+      stride: 1
+      padding: 1
+  - dropout:
+      p: 0.5
+  - permute:  # (B,C,T) -> (B,T,C)
+      dims: [0, 2, 1]
+  - lstm_block:
+      input_size: 100
+      hidden_size: 100
+      num_layers: 2
+      dropout: 0.5
+      batch_first: true
+      bidirectional: false
+  - dropout:
+      p: 0.5
+  - linear:
+      in_features: 100
+      out_features: 1           # single-logit output
+
+loss:
+  name: bce_with_smoothing
+  config:
+    smoothing: 0.1
+    pos_weight: 1.0             # tweak for large class-imbalance
+
+optimizer:
+  name: adamw
+  config:
+    lr: 0.001
+    weight_decay: 0.01
+
+trainer:
+  max_epochs: 15
+  early_stopping:
+    monitor: val_loss
+    min_delta: 0.00
+    patience: 10
+    verbose: true
+    mode: min
+
+general:
+  wandb: true
+  output_path: '<RESULTS_PATH>/cnn-lstm-results'
+  checkpoint_path: '<CHECKPOINTS_PATH>/cnn-lstm-results'
+  seed: 42
+  single_logit: true            # 1-logit + sigmoid (false = 2-logit soft-max)
+  eval_checkpoint: last

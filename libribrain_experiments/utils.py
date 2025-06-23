@@ -1,3 +1,4 @@
+import random
 from pnpl.datasets import LibriBrainPhoneme, LibriBrainSpeech
 from torch.utils.data import DataLoader, ConcatDataset
 from pnpl.datasets.grouped_dataset import GroupedDataset
@@ -12,7 +13,7 @@ from torchmetrics.classification import MulticlassAUROC, BinaryAUROC
 from torchmetrics import JaccardIndex
 from libribrain_experiments.models.configurable_modules.classification_module import ClassificationModule
 import numpy as np
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
 import json
 import numpy as np
@@ -48,10 +49,70 @@ class LibriBrainSpeechSimplified(torch.utils.data.Dataset):
         return sample
 
 
+
+class FilteredDataset(torch.utils.data.Dataset):
+    """
+    Parameters:
+        dataset: LibriBrain dataset.
+        limit_samples (int, optional): If provided, limits the length of the dataset to this
+                          number of samples.
+        speech_silence_only (bool, optional): If True, only includes segments that are either
+                          purely speech or purely silence (with additional balancing).
+        apply_sensors_speech_mask (bool, optional): If True, applies a fixed sensor mask to the sensor
+                          data in each sample.
+    """
+
+    # These are the sensors we identified as being particularly useful
+    SENSORS_SPEECH_MASK = [18, 20, 22, 23, 45, 120, 138, 140, 142, 143, 145,
+                          146, 147, 149, 175, 176, 177, 179, 180, 198, 271, 272, 275]
+
+    def __init__(self,
+                 dataset,
+                 limit_samples=None,
+                 apply_sensors_speech_mask=True):
+        super().__init__()
+
+        self.dataset = dataset
+        self.limit_samples = limit_samples
+        self.apply_sensors_speech_mask = apply_sensors_speech_mask
+
+        # These are the sensors we identified:
+        self.sensors_speech_mask = self.SENSORS_SPEECH_MASK
+
+        # Shuffle the indices
+        self.balanced_indices = list(range(len(dataset)))
+        self.balanced_indices = random.sample(self.balanced_indices, len(self.balanced_indices))
+
+        # relay the mandatory bookkeeping attributes
+        if hasattr(dataset, "labels_sorted"):
+            self.labels_sorted = list(dataset.labels_sorted)
+        else:  # LibriBrainSpeech has only 2 classes
+            self.labels_sorted = [0, 1]
+        self.channel_means = getattr(dataset, "channel_means", None)
+        self.channel_stds  = getattr(dataset, "channel_stds",  None)
+
+    def __len__(self):
+        """Returns the number of samples in the filtered dataset."""
+        if self.limit_samples is not None:
+            return self.limit_samples
+        return len(self.balanced_indices)
+
+    def __getitem__(self, index):
+        # Map index to the original dataset using balanced indices
+        original_idx = self.balanced_indices[index]
+        if self.apply_sensors_speech_mask:
+            sensors = self.dataset[original_idx][0][self.sensors_speech_mask]
+        else:
+            sensors = self.dataset[original_idx][0][:]
+        label_from_the_middle_idx = self.dataset[original_idx][1].shape[0] // 2
+        return sensors, self.dataset[original_idx][1][label_from_the_middle_idx]
+
+
 DATASETS = {
     "libribrain_phoneme": LibriBrainPhoneme,
     "libribrain_speech": LibriBrainSpeech,
-    "libribrain_speech_simplified": LibriBrainSpeechSimplified
+    "libribrain_speech_simplified": LibriBrainSpeechSimplified,
+    "libribrain_speech_filtered": lambda **kw: FilteredDataset(LibriBrainSpeech(**kw)),
 }
 
 
@@ -85,8 +146,11 @@ def get_dataset_partition_from_config(partition_config, channel_means=None, chan
                                  for ds in partition_config]
 
     for config in partition_dataset_configs:
+        # We can disable this to behave like the notebook if needed
+        inherit_stats = config.pop("use_train_stats", True)
+
         # for simplicity we standardize using the first training dataset
-        if (config.get("standardize", True)):
+        if (config.get("standardize", True)) and inherit_stats:
             config['channel_means'] = channel_means.tolist(
             ) if channel_means is not None else None
             config['channel_stds'] = channel_stds.tolist(
@@ -193,7 +257,10 @@ def get_label_distribution(train_loader, n_classes):
 def run_training(train_loader, val_loader, config, n_classes, best_model_metric="val_f1_macro", module=None, best_model_metric_mode="max"):
     if module is None:
         module = ClassificationModule(
-            model_config=config["model"], n_classes=n_classes, optimizer_config=config["optimizer"], loss_config=config["loss"])
+            model_config=config["model"], n_classes=n_classes,
+            optimizer_config=config["optimizer"], loss_config=config["loss"],
+            single_logit=config["general"].get("single_logit", False)
+        )
 
     logger = False
     if (config["general"]["wandb"]):
@@ -203,6 +270,9 @@ def run_training(train_loader, val_loader, config, n_classes, best_model_metric=
             save_dir=config["general"]["checkpoint_path"])
 
     callbacks = []
+    if ("early_stopping" in config["trainer"]):
+        es_conf = config["trainer"].pop("early_stopping")
+        callbacks.append(EarlyStopping(**es_conf))
     if (config["general"]["checkpoint_path"] is not None):
         os.makedirs(config["general"]["checkpoint_path"], exist_ok=True)
         checkpoint_callback = ModelCheckpoint(
@@ -246,12 +316,18 @@ def run_validation(val_loader, module, labels, avg_evals=None, samples_per_class
     all_logits = []
     all_targets = []
     all_probas = []
+    single_logit = False
     with torch.no_grad():
         for batch in val_loader:
             x, y = batch[0], batch[1]
             x = x.to(module.device)
             y = y.to(module.device)
             outputs = module(x)
+            # single–logit -> 2-column soft-max
+            if outputs.dim() == 2 and outputs.size(1) == 1:  # (B,1)
+                single_logit = True
+                p = torch.sigmoid(outputs)                   # (B,1)
+                outputs = torch.cat([1.0 - p, p], dim=1)     # (B,2)
             all_logits.extend(outputs)
             preds = torch.argmax(outputs, dim=1)
             all_preds.extend(preds)
@@ -273,21 +349,26 @@ def run_validation(val_loader, module, labels, avg_evals=None, samples_per_class
     most_common_class = torch.argmax(bincount)
     naive_acc = bincount[most_common_class] / len(all_targets)
 
+    num_classes = max(len(disp_labels), 2)
     acc = Accuracy(task="multiclass", average="micro",
-                   num_classes=len(disp_labels)).to(module.device)
+                   num_classes=num_classes).to(module.device)
     bal_acc = Accuracy(task="multiclass", average="macro",
-                       num_classes=len(disp_labels)).to(module.device)
+                       num_classes=num_classes).to(module.device)
     f1_macro = F1Score(task="multiclass", average="macro",
-                       num_classes=len(disp_labels)).to(module.device)
+                       num_classes=num_classes).to(module.device)
     f1_micro = F1Score(task="multiclass", average="micro",
-                       num_classes=len(disp_labels)).to(module.device)
+                       num_classes=num_classes).to(module.device)
     f1_weighted = F1Score(task="multiclass", average="weighted",
-                          num_classes=len(disp_labels)).to(module.device)
+                          num_classes=num_classes).to(module.device)
     rocauc_macro = MulticlassAUROC(average="macro",
-                                   num_classes=len(disp_labels)).to(module.device)
+                                   num_classes=num_classes).to(module.device)
     rocauc_micro = MulticlassAUROC(average="weighted",
-                                   num_classes=len(disp_labels)).to(module.device)
-    loss = torch.nn.CrossEntropyLoss().to(module.device)(all_logits, all_targets)
+                                   num_classes=num_classes).to(module.device)
+    if single_logit:  # binary -> BCE; expects (B,) logits / probs
+        bce = torch.nn.BCEWithLogitsLoss()
+        loss = bce(all_logits[:, 1], all_targets.float())  # use the positive logit
+    else:  # multiclass -> CE
+        loss = torch.nn.CrossEntropyLoss().to(module.device)(all_logits, all_targets)
     random_preds = torch.randint(
         0, len(disp_labels), (len(all_targets),), device=module.device)
     random_acc = acc(random_preds, all_targets)

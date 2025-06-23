@@ -152,30 +152,40 @@ def main(args):
                 config["general"]["output_path"], "last-" + str(args.run_name), hpo_config=run_configs[args.run_index], trainer=trainer)
     start_time = time.time()
     print("LOGGED LAST RESULTS in ", time.time() - start_time, " seconds")"""
-    del module
+    eval_ckpt = config["general"].get("eval_checkpoint", "best")
+    if   eval_ckpt == "last":
+        model_for_eval = module
+    elif eval_ckpt == "best":
+        model_for_eval = best_module
+    else:
+        raise ValueError(
+            f'Unknown evaluation_checkpoint "{eval_ckpt}". '
+            'Use "best" or "last".')
 
-    best_module = best_module.to(find_usable_cuda_devices()[0])
+    model_for_eval = model_for_eval.to(find_usable_cuda_devices()[0])
+    del module, best_module
+
     result, y, preds, logits = run_validation(
-        val_loader, best_module, labels, avg_evals=[], samples_per_class=samples_per_class)
+        val_loader, model_for_eval, labels, avg_evals=[], samples_per_class=samples_per_class)
     start_time = time.time()
     print("VALIDATED MODEL in ", time.time() - start_time, " seconds")
     log_results(result, y, preds, logits,
-                config["general"]["output_path"], "val-best-" + str(args.run_name))
+                config["general"]["output_path"], f"val-{eval_ckpt}-" + str(args.run_name))
     start_time = time.time()
-    print("LOGGED BEST RESULTS in ", time.time() - start_time, " seconds")
+    print(f"LOGGED {eval_ckpt.upper()} RESULTS in ", time.time() - start_time, " seconds")
 
     if test_dataset is not None:
         print("Validating on test set")
         test_loader = torch.utils.data.DataLoader(
             test_dataset, **config["data"]["dataloader"])
         result, y, preds, logits = run_validation(
-            test_loader, best_module, labels, samples_per_class=samples_per_class)
+            test_loader, model_for_eval, labels, samples_per_class=samples_per_class)
         start_time = time.time()
         print("VALIDATED MODEL in ", time.time() - start_time, " seconds")
         log_results(result, y, preds, logits,
-                    config["general"]["output_path"], "test-best-" + str(args.run_name))
+                    config["general"]["output_path"], f"test-{eval_ckpt}-" + str(args.run_name))
         start_time = time.time()
-        print("LOGGED BEST RESULTS in ", time.time() - start_time, " seconds")
+        print(f"LOGGED {eval_ckpt.upper()} RESULTS in ", time.time() - start_time, " seconds")
 
 
 if __name__ == "__main__":
