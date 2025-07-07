@@ -19,6 +19,11 @@ import json
 import numpy as np
 
 
+# These are the sensors we identified as being particularly useful
+SENSORS_SPEECH_MASK = [18, 20, 22, 23, 45, 120, 138, 140, 142, 143, 145,
+                      146, 147, 149, 175, 176, 177, 179, 180, 198, 271, 272, 275]
+
+
 class LibriBrainSpeechSimplified(torch.utils.data.Dataset):
     """
     Parameters:
@@ -62,10 +67,6 @@ class FilteredDataset(torch.utils.data.Dataset):
                           data in each sample.
     """
 
-    # These are the sensors we identified as being particularly useful
-    SENSORS_SPEECH_MASK = [18, 20, 22, 23, 45, 120, 138, 140, 142, 143, 145,
-                          146, 147, 149, 175, 176, 177, 179, 180, 198, 271, 272, 275]
-
     def __init__(self,
                  dataset,
                  limit_samples=None,
@@ -77,7 +78,7 @@ class FilteredDataset(torch.utils.data.Dataset):
         self.apply_sensors_speech_mask = apply_sensors_speech_mask
 
         # These are the sensors we identified:
-        self.sensors_speech_mask = self.SENSORS_SPEECH_MASK
+        self.sensors_speech_mask = SENSORS_SPEECH_MASK
 
         # Shuffle the indices
         self.balanced_indices = list(range(len(dataset)))
