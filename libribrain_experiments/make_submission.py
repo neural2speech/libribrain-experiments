@@ -369,6 +369,8 @@ def main(argv: list[str] | None = None) -> None:
             data_path=args.data_path,
             tmin=0.0,
             tmax=args.tmax,
+            standardize=False,
+            clipping_boundary=None,
             task="speech",
         )
     else:
