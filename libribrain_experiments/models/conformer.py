@@ -27,6 +27,9 @@ class ConformerSpeech(nn.Module):
         num_classes: int = 2,      # speech / silence
         use_preproj: bool = True,  # whether to add a projection layer
         size: str = None,          # Model size to use
+        in_norm: str = None,
+        in_dropout: float = 0.0,
+        out_dropout: float = 0.0,
     ):
         super().__init__()
 
@@ -52,14 +55,35 @@ class ConformerSpeech(nn.Module):
                     f"Unknown Conformer size: {size}"
                 )
 
-        if use_preproj:
+        #  Front‑end projection
+        self._pre_kind = None
+        if isinstance(use_preproj, str):
+            self._pre_kind = use_preproj.lower()
+        elif use_preproj:           # legacy True: "linear"
+            self._pre_kind = "linear"
+
+        if self._pre_kind == "linear":
             self.preproj = nn.Linear(input_dim, hidden_size)
+        elif self._pre_kind == "conv1d":
+            # Conv over the time dimension, kernel=1 ⇒ just channel mixing
+            self.preproj = nn.Conv1d(input_dim, hidden_size, kernel_size=1)
+        elif self._pre_kind == "conv2d":
+            # Treat sensors as “height”, time as “width”
+            self.preproj = nn.Conv2d(1, hidden_size, kernel_size=(input_dim, 1))
         else:
             if input_dim != hidden_size:
                 raise ValueError(
                     "When use_preproj=False you must set hidden_size == input_dim"
                 )
             self.preproj = nn.Identity()
+        self.in_dropout = nn.Dropout(in_dropout) if in_dropout > 0 else nn.Identity()
+
+        if in_norm == "layer":
+            self.in_norm = nn.LayerNorm(hidden_size)
+        elif in_norm == "batch":
+            self.in_norm = nn.BatchNorm1d(hidden_size)
+        else:
+            self.in_norm = nn.Identity()
 
         self.encoder = Conformer(
             input_dim=hidden_size,
@@ -68,10 +92,25 @@ class ConformerSpeech(nn.Module):
             num_layers=num_layers,
             depthwise_conv_kernel_size=depthwise_conv_kernel_size,
         )
+        self.out_dropout = nn.Dropout(out_dropout) if out_dropout > 0 else nn.Identity()
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-        x = self.preproj(x.transpose(1, 2))  # (B, C, T) -> (B, T, hidden)
+        #  Apply projection   (input comes in as (B, C, T))
+        if self._pre_kind == "linear":
+            x = self.preproj(x.transpose(1, 2))  # (B, T, H)
+        elif self._pre_kind == "conv1d":
+            x = self.preproj(x)                  # (B, H, T)
+            x = x.transpose(1, 2)                # (B, T, H)
+        elif self._pre_kind == "conv2d":
+            x = x.unsqueeze(1)                   # (B,1,C,T)
+            x = self.preproj(x)                  # (B,H,1,T)
+            x = x.squeeze(2).transpose(1, 2)     # (B, T, H)
+        else:  # Identity
+            x = x.transpose(1, 2)                # (B, T, C=H)
+
+        x = self.in_dropout(x)
+        x = self.in_norm(x)
 
         # Encoder needs "lengths" -> here all windows have identical length
         lengths = torch.full(
@@ -79,4 +118,5 @@ class ConformerSpeech(nn.Module):
         )
 
         x, _ = self.encoder(x, lengths)  # (B, hidden)
-        return self.classifier(x.mean(dim=1))
+        x = self.out_dropout(x).mean(dim=1)
+        return self.classifier(x)
