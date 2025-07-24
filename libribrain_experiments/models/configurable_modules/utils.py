@@ -81,6 +81,8 @@ def optimizer_from_config(parameters, config):
                          + f"{config['name']}")
 
     if ("scheduler" in config):
+        scheduler_interval = config.get("scheduler_interval", "step")
+
         if (config["scheduler"] == "linear"):
             scheduler = LinearLR(optimizer,
                                  **config["scheduler_config"])
@@ -96,9 +98,16 @@ def optimizer_from_config(parameters, config):
         else:
             raise ValueError(f"Unsupported scheduler: ",
                              config["scheduler"])
+
+        sched_dict = {
+            "scheduler": scheduler,
+            "interval": scheduler_interval,
+            "frequency": 1,
+            "name": "lr",
+        }
         return {
             "optimizer": optimizer,
-            "lr_scheduler": scheduler
+            "lr_scheduler": sched_dict
         }
 
     return optimizer

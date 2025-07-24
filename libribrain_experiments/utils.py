@@ -15,6 +15,7 @@ from libribrain_experiments.augment import MEGAugment
 from libribrain_experiments.models.configurable_modules.classification_module import ClassificationModule
 import numpy as np
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from pytorch_lightning.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 import json
 import numpy as np
@@ -306,6 +307,8 @@ def run_training(train_loader, val_loader, config, n_classes, best_model_metric=
             save_dir=config["general"]["checkpoint_path"])
 
     callbacks = []
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+    callbacks.append(lr_monitor)
     if ("early_stopping" in config["trainer"]):
         es_conf = config["trainer"].pop("early_stopping")
         callbacks.append(EarlyStopping(**es_conf))
