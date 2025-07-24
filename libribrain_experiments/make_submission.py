@@ -39,6 +39,7 @@ import os
 import sys
 
 import numpy as np
+import scipy.ndimage as ndi
 import torch
 from pnpl.datasets import (  # pip install pnpl
     LibriBrainCompetitionHoldout,
@@ -51,6 +52,106 @@ from libribrain_experiments.models.configurable_modules.classification_module im
     ClassificationModule,
 )
 from libribrain_experiments.utils import SENSORS_SPEECH_MASK
+
+
+def majority_filter(x: np.ndarray, k: int) -> np.ndarray:
+    """
+    Median/majority vote in a k-sample sliding window.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        1-D array of probabilities or binary decisions.
+        Works with any numeric dtype.
+    k : int
+        Size of the sliding window.
+        k >= 3 applies a classical median-filter (odd `k` preferred).
+        Values < 3 bypass the filter and return x unchanged.
+
+    Returns
+    -------
+    np.ndarray
+        Filtered array, same shape and dtype as the input.
+    """
+    return ndi.median_filter(x, size=k, mode="nearest") if k >= 3 else x
+
+
+def hysteresis(p: np.ndarray, low: float, high: float) -> np.ndarray:
+    """
+    Two-threshold (Schmitt-trigger) hysteresis on a probability track.
+
+    A new speech segment starts when p rises above high and
+    ends only after it has fallen below low.
+
+    Parameters
+    ----------
+    p : np.ndarray
+        1-D array of probabilities.
+    low : float
+        Leave-speech (lower) threshold.
+    high : float
+        Enter-speech (upper) threshold. Must satisfy high > low.
+
+    Returns
+    -------
+    np.ndarray
+        Binary mask (float /1) of the same length as p.
+    """
+    out = np.zeros_like(p, dtype=float)
+    state = False
+    for i, v in enumerate(p):
+        state = (v > high) or (state and v > low)
+        out[i] = 1.0 if state else 0.0
+    return out
+
+
+def enforce_min_run(vec: np.ndarray, min_len: int) -> np.ndarray:
+    """
+    Remove contiguous 1 runs shorter than a minimum length.
+
+    Useful for deleting very short "blips" of speech.
+
+    Parameters
+    ----------
+    vec : np.ndarray
+        Binary 1-D mask (0/1 or bool).
+    min_len : int
+        Minimum allowed run length (in samples).
+        If `min_len < 1` the input is returned unchanged.
+
+    Returns
+    -------
+    np.ndarray
+        Mask with short 1-runs set to 0.
+    """
+    if min_len < 1:
+        return vec
+    out = vec.copy()
+    idx = np.flatnonzero(np.diff(np.r_[0, out, 0]))
+    for s, e in zip(idx[::2], idx[1::2]):
+        if e - s < min_len:
+            out[s:e] = 0.0
+    return out
+
+
+def fill_short_gaps(vec: np.ndarray, max_gap: int) -> np.ndarray:
+    """
+    Bridge short 0-gaps inside speech regions.
+
+    Parameters
+    ----------
+    vec : np.ndarray
+        Binary mask where 1 marks speech.
+    max_gap : int
+        Maximum gap length (in samples) to be filled.
+        A value <= 0 disables gap filling.
+
+    Returns
+    -------
+    np.ndarray
+        Mask where 0-runs shorter than max_gap are turned into 1.
+    """
+    return 1 - enforce_min_run(1 - vec, max_gap) if max_gap > 0 else vec
 
 
 @torch.inference_mode()
@@ -203,6 +304,38 @@ def main(argv: list[str] | None = None) -> None:
         dest="use_train_stats",
         help="Compute mean/std on the same split instead of the train split",
     )
+    post = parser.add_argument_group("post-processing (disabled by default)")
+    post.add_argument(
+        "--median_win",
+        type=int,
+        default=0,
+        help="Majority / median filter window (frames); 0 = skip",
+    )
+    post.add_argument(
+        "--hys_low",
+        type=float,
+        default=None,
+        help="Hysteresis: leave-speech threshold (prob)",
+    )
+    post.add_argument(
+        "--hys_high",
+        type=float,
+        default=None,
+        help="Hysteresis: enter-speech threshold (prob)",
+    )
+    post.add_argument(
+        "--min_speech_len",
+        type=int,
+        default=0,
+        help="Drop speech islands shorter than N frames",
+    )
+    post.add_argument(
+        "--min_sil_len",
+        type=int,
+        default=0,
+        help="Fill silence gaps shorter than N frames",
+    )
+
     args = parser.parse_args(argv)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -339,6 +472,30 @@ def main(argv: list[str] | None = None) -> None:
             # we can break once we have filled all predictable time-points
             if start_sample_idx >= (N - 2 * center_offset):
                 break
+
+        # Optional post-processing of the probability track
+        scores = np.asarray(all_probs, dtype=float)  # raw probabilities
+
+        # majority / median filter
+        if args.median_win >= 3:
+            scores = majority_filter(scores, args.median_win)
+
+        # hysteresis or plain 0.5 cut-off -> binary mask
+        if args.hys_low is not None and args.hys_high is not None:
+            binary = hysteresis(scores, args.hys_low, args.hys_high)
+        else:
+            binary = (scores >= 0.5).astype(float)
+
+        # duration constraints
+        if args.min_speech_len > 0 or args.min_sil_len > 0:
+            binary = enforce_min_run(binary, args.min_speech_len)
+            binary = fill_short_gaps(binary, args.min_sil_len)
+
+        all_probs = np.where(
+            binary > 0,
+            np.maximum(scores, 0.5),  # make sure the next 0.5 cut-off keeps them
+            0.0,
+        ).tolist()
 
         # convert to list[Tensor(1)] for helper
         tensor_preds = [torch.tensor(p).unsqueeze(0) for p in all_probs]
