@@ -11,6 +11,7 @@ from pytorch_lightning.loggers import WandbLogger
 from torchmetrics import Accuracy, F1Score, Recall
 from torchmetrics.classification import MulticlassAUROC, BinaryAUROC
 from torchmetrics import JaccardIndex
+from libribrain_experiments.augment import MEGAugment
 from libribrain_experiments.models.configurable_modules.classification_module import ClassificationModule
 import numpy as np
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -109,6 +110,32 @@ class FilteredDataset(torch.utils.data.Dataset):
         return sensors, self.dataset[original_idx][1][label_from_the_middle_idx]
 
 
+class MEGAugmentDataset(torch.utils.data.Dataset):
+    """
+    Thin wrapper that runs MEGAugment per sample.
+
+    - Keeps labels / attrs intact
+    - Should be applied to train split only
+    """
+    def __init__(self, base_dataset, augment_cfg: dict):
+        super().__init__()
+        self.base = base_dataset
+        self.aug = MEGAugment(**augment_cfg)
+
+        # Relay bookkeeping attributes
+        for attr in ("labels_sorted", "channel_means", "channel_stds"):
+            if hasattr(base_dataset, attr):
+                setattr(self, attr, getattr(base_dataset, attr))
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y = self.base[idx]
+        x = self.aug(x)
+        return x, y
+
+
 DATASETS = {
     "libribrain_phoneme": LibriBrainPhoneme,
     "libribrain_speech": LibriBrainSpeech,
@@ -163,7 +190,15 @@ def get_dataset_partition_from_config(partition_config, channel_means=None, chan
         if (name not in DATASETS):
             raise ValueError(
                 f"Dataset {name} not supported. Please change data config")
+        # Extract the MEG Agument config
+        mega_cfg  = config.pop("meg_augment", None)
+
         dataset = DATASETS[name](**config)
+
+        if mega_cfg:
+            if isinstance(mega_cfg, bool):
+                mega_cfg = {}  # all defaults
+            dataset = MEGAugmentDataset(dataset, mega_cfg)
         partition_datasets.append(dataset)
         partition_dataset_labels.append(dataset.labels_sorted)
     # ensure all datasets have the same set of labels
