@@ -11,6 +11,7 @@ from libribrain_experiments.models.average_groups import AverageGroups
 from libribrain_experiments.models.dyslexnet import DyslexNetTransformer
 from libribrain_experiments.models.bertspeech import BertSpeech
 from libribrain_experiments.models.conformer import ConformerSpeech
+from libribrain_experiments.models.conformer_seq2seq import ConformerSeq2Seq
 
 
 def modules_from_config(modules: list[tuple[str, dict]]):
@@ -60,6 +61,8 @@ def modules_from_config(modules: list[tuple[str, dict]]):
             module = BertSpeech(**config)
         elif module_type == "conformer":
             module = ConformerSpeech(**config)
+        elif module_type == "conformer_seq2seq":
+            module = ConformerSeq2Seq(**config)
         else:
             raise ValueError(f"Unsupported module_type: {module_type}")
         modules_list.append(module)

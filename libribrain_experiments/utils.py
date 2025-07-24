@@ -13,6 +13,8 @@ from torchmetrics.classification import MulticlassAUROC, BinaryAUROC
 from torchmetrics import JaccardIndex
 from libribrain_experiments.augment import MEGAugment
 from libribrain_experiments.models.configurable_modules.classification_module import ClassificationModule
+from libribrain_experiments.models.configurable_modules.sequence_classification_module \
+    import SequenceClassificationModule
 import numpy as np
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -21,10 +23,19 @@ import json
 import numpy as np
 
 
+
 # These are the sensors we identified as being particularly useful
 SENSORS_SPEECH_MASK = [18, 20, 22, 23, 45, 120, 138, 140, 142, 143, 145,
                       146, 147, 149, 175, 176, 177, 179, 180, 198, 271, 272, 275]
 
+
+class LibriBrainSpeechWithLabels(LibriBrainSpeech):
+    """LibriBrainSpeech + .labels_sorted = [0, 1] so the old
+    pipeline keeps working untouched."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the two classes are always 0 = silence, 1 = speech
+        self.labels_sorted = [0, 1]
 
 class LibriBrainSpeechSimplified(torch.utils.data.Dataset):
     """
@@ -139,7 +150,7 @@ class MEGAugmentDataset(torch.utils.data.Dataset):
 
 DATASETS = {
     "libribrain_phoneme": LibriBrainPhoneme,
-    "libribrain_speech": LibriBrainSpeech,
+    "libribrain_speech": LibriBrainSpeechWithLabels,
     "libribrain_speech_simplified": LibriBrainSpeechSimplified,
     "libribrain_speech_filtered": lambda **kw: FilteredDataset(LibriBrainSpeech(**kw)),
 }
@@ -292,8 +303,18 @@ def get_label_distribution(train_loader, n_classes):
 
 
 def run_training(train_loader, val_loader, config, n_classes, best_model_metric="val_f1_macro", module=None, best_model_metric_mode="max"):
+    def _labels_are_sequences(loader) -> bool:
+        """Peek one batch to see if targets are (B,) or (B,T)."""
+        xb, yb = next(iter(loader))
+        return yb.dim() == 2  # (B,T) -> sequence
+
     if module is None:
-        module = ClassificationModule(
+        ModuleCls = (
+            SequenceClassificationModule
+            if _labels_are_sequences(train_loader)
+            else ClassificationModule
+        )
+        module = ModuleCls(
             model_config=config["model"], n_classes=n_classes,
             optimizer_config=config["optimizer"], loss_config=config["loss"],
             single_logit=config["general"].get("single_logit", False)
