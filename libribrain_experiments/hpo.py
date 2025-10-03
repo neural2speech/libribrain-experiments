@@ -1,6 +1,15 @@
+import os
 from argparse import ArgumentParser
 import itertools
-from libribrain_experiments.utils import run_training, get_datasets_from_config, adapt_config_to_data, run_validation, log_results
+from libribrain_experiments.utils import (
+    run_training,
+    get_datasets_from_config,
+    adapt_config_to_data,
+    run_validation,
+    log_results,
+    get_holdout_dataset_from_config,
+    write_holdout_predictions,
+)
 import yaml
 import wandb
 import pytorch_lightning as lightning
@@ -186,6 +195,22 @@ def main(args):
                     config["general"]["output_path"], f"test-{eval_ckpt}-" + str(args.run_name))
         start_time = time.time()
         print(f"LOGGED {eval_ckpt.upper()} RESULTS in ", time.time() - start_time, " seconds")
+
+    # Write Holdout CSV(s)
+    holdout_ds = get_holdout_dataset_from_config(config["data"])
+    if holdout_ds is not None:
+        # default output filename under the run's output directory
+        out_dir = os.path.join(config["general"]["output_path"], f"holdout-{eval_ckpt}-{args.run_name}")
+        os.makedirs(out_dir, exist_ok=True)
+        out_csv = os.path.join(out_dir, "submission_phoneme.csv")
+        print(f"Generating holdout predictions -> {out_csv}")
+        write_holdout_predictions(
+            model_for_eval,
+            holdout_ds,
+            dataloader_cfg=config["data"].get("dataloader", {}),
+            out_csv=out_csv,
+            device=model_for_eval.device,
+        )
 
 
 if __name__ == "__main__":

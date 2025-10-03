@@ -1,0 +1,106 @@
+data:
+  datasets:
+    train:
+      - libribrain_phoneme:
+          data_path: '<DATA_PATH>'
+          preprocessing_str: 'bads+headpos+sss+notch+bp+ds'
+          label_type: 'phoneme'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          exclude_run_keys: [['0', '11', 'Sherlock1', '2'], ['0', '12', 'Sherlock1', '2']]
+          preload_files: false
+
+    val:
+      - libribrain_phoneme:
+          data_path: '<DATA_PATH>'
+          label_type: 'phoneme'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          include_run_keys: [['0', '11', 'Sherlock1', '2']]
+          preload_files: false
+    test:
+      - libribrain_phoneme:
+          data_path: '<DATA_PATH>'
+          label_type: 'phoneme'
+          standardize: true
+          tmin: 0.0
+          tmax: 0.5
+          include_run_keys: [['0', '12', 'Sherlock1', '2']]
+          preload_files: false
+  dataloader:
+    batch_size: 256
+    num_workers: 4
+  general:
+    inMemory: False
+    averaged_samples: 100
+    dynamic_averaged_samples: 100
+    averaged_drop_remaining: false
+
+
+model:
+  - conformer:
+      pre_norm: instance
+      in_dropout: 0.1
+
+      # Small
+      # hidden_size: 144        # Encoder Dim (pick 256 or 512 for M/L)
+      # ffn_dim: 576            # 4x hidden_size
+      # num_layers: 16
+      # num_heads: 4
+
+      # Medium
+      # hidden_size: 256
+      # ffn_dim: 1024
+      # num_layers: 16
+      # num_heads: 4
+
+      # Large
+      # hidden_size: 512
+      # ffn_dim: 2048
+      # num_layers: 17
+      # num_heads: 8
+
+      # Best 2025-09-09
+      hidden_size: 144
+      ffn_dim: 2048
+      num_layers: 7
+      num_heads: 12
+      depthwise_conv_kernel_size: 127
+
+      # General parameters
+      # depthwise_conv_kernel_size: 31
+      seq_len: 125            # length of window (samples)
+      input_dim: 306          # sensors
+      use_preproj: conv1d     # leave on unless hidden_size == 306
+      num_classes: 39         # ARPAbet phonemes
+
+loss:
+  name: cross_entropy
+  config:
+    weight: auto_inv_sqrt
+
+
+optimizer:
+  name: adamw
+  config:
+    lr: 0.0001
+    weight_decay: 0.05
+
+trainer:
+  max_epochs: 100
+  early_stopping:
+    monitor: val_f1_macro
+    min_delta: 0.00
+    patience: 10
+    verbose: true
+    mode: max
+
+general:
+  wandb: True
+  output_path: '<RESULTS_PATH>/final-results'
+  checkpoint_path: '<CHECKPOINTS_PATH>/final-results'
+  seed: 42
+  eval_checkpoint: best
+  best_model_metrics: val_f1_macro

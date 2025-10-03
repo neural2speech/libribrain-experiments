@@ -40,6 +40,17 @@ class ClassificationModule(LightningModule):
         self.binary_recall = Recall(task="binary")
         self.binary_f1 = F1Score(task="binary")
 
+        # epoch-wise (true metrics across whole epoch)
+        self.train_f1_macro_epoch = F1Score(num_classes=n_classes,
+                                            task="multiclass", average="macro",
+                                            zero_division=0)
+        self.val_f1_macro_epoch   = F1Score(num_classes=n_classes,
+                                            task="multiclass", average="macro",
+                                            zero_division=0)
+        self.test_f1_macro_epoch  = F1Score(num_classes=n_classes,
+                                            task="multiclass", average="macro",
+                                            zero_division=0)
+
     def forward(self, x):
         for module in self.modules_list:
             x = module(x)
@@ -67,6 +78,7 @@ class ClassificationModule(LightningModule):
         f1_micro = self.f1_micro(preds, y)
         f1_macro = self.f1_macro(preds, y)
         bal_acc  = self.balanced_accuracy(preds, y)
+        self.train_f1_macro_epoch.update(preds, tgt)
         self.log('train_loss', loss)
         self.log('train_acc', acc)
         self.log('train_f1_micro', f1_micro)
@@ -74,6 +86,7 @@ class ClassificationModule(LightningModule):
         self.log('train_precision_micro', self.precision_micro(preds, y))
         self.log('train_precision_macro', self.precision_macro(preds, y))
         self.log('train_bal_acc', bal_acc)
+        self.log('train_f1_macro_batch', self.f1_macro(preds, y), prog_bar=False)
         for class_idx in range(y_hat.shape[1]):
             y_binary = (y == class_idx).int()
             y_hat_binary = y_hat.argmax(dim=1) == class_idx
@@ -98,6 +111,11 @@ class ClassificationModule(LightningModule):
                 y_hat_binary, y_binary))
         return loss
 
+    def on_train_epoch_end(self):
+        # compute & log the true epoch macro-F1
+        self.log('train_f1_macro_epoch', self.train_f1_macro_epoch, prog_bar=True)
+        self.train_f1_macro_epoch.reset()
+
     def validation_step(self, batch, batch_idx):
         x, y = batch[0], batch[1]
         y_hat = self(x)
@@ -107,6 +125,7 @@ class ClassificationModule(LightningModule):
         f1_micro = self.f1_micro(preds, y)
         f1_macro = self.f1_macro(preds, y)
         bal_acc  = self.balanced_accuracy(preds, y)
+        self.val_f1_macro_epoch.update(preds, tgt)
         self.log('val_loss', loss)
         self.log('val_acc', acc)
         self.log('val_f1_micro', f1_micro)
@@ -114,6 +133,7 @@ class ClassificationModule(LightningModule):
         self.log('val_precision_micro', self.precision_micro(preds, y))
         self.log('val_precision_macro', self.precision_macro(preds, y))
         self.log('val_bal_acc', bal_acc)
+        self.log('val_f1_macro_batch', self.f1_macro(preds, y), prog_bar=False)
         for class_idx in range(y_hat.shape[1]):
             y_binary = (y == class_idx).int()
             y_hat_binary = y_hat.argmax(dim=1) == class_idx
@@ -138,6 +158,10 @@ class ClassificationModule(LightningModule):
 
         return loss
 
+    def on_validation_epoch_end(self):
+        self.log('val_f1_macro_epoch', self.val_f1_macro_epoch, prog_bar=True)
+        self.val_f1_macro_epoch.reset()
+
     def test_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
@@ -147,6 +171,8 @@ class ClassificationModule(LightningModule):
         f1_micro = self.f1_micro(preds, y)
         f1_macro = self.f1_macro(preds, y)
         bal_acc  = self.balanced_accuracy(preds, y)
+        self.test_f1_macro_epoch.update(preds, tgt)
+
         self.log('test_loss', loss)
         self.log('test_acc', acc)
         self.log('test_f1_micro', f1_micro)
@@ -154,6 +180,7 @@ class ClassificationModule(LightningModule):
         self.log('test_precision_micro', self.precision_micro(preds, y))
         self.log('test_precision_macro', self.precision_macro(preds, y))
         self.log('test_bal_acc', bal_acc)
+        self.log('test_f1_macro_batch', self.f1_macro(preds, y), prog_bar=False)
         for class_idx in range(y_hat.shape[1]):
             y_binary = (y == class_idx).int()
             y_hat_binary = y_hat.argmax(dim=1) == class_idx
@@ -177,3 +204,7 @@ class ClassificationModule(LightningModule):
             self.log(f'test_f1_class_{class_idx}',
                      self.binary_f1(y_hat_binary, y_binary))
         return loss
+
+    def on_test_epoch_end(self):
+        self.log('test_f1_macro_epoch', self.test_f1_macro_epoch, prog_bar=True)
+        self.test_f1_macro_epoch.reset()
