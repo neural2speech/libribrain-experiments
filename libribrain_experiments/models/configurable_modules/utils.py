@@ -201,11 +201,18 @@ def loss_fn_from_config(loss_config):
         if "weight" in cfg:
             cfg["weight"] = _to_tensor(cfg["weight"])
         cfg.pop("class_counts", None)
+        cfg.pop("cb_beta", None)
+        cfg.pop("alpha", None)
+        cfg.pop("log_k", None)
         return nn.CrossEntropyLoss(**cfg)
 
     elif name == "bce_with_smoothing":
         smoothing  = float(cfg.pop("smoothing", .0))
         pos_weight = _to_tensor(cfg.pop("pos_weight", 1.0))  # handles list or scalar
+        cfg.pop("class_counts", None)
+        cfg.pop("cb_beta", None)
+        cfg.pop("alpha", None)
+        cfg.pop("log_k", None)
         return BCEWithLogitsLossWithSmoothing(smoothing, pos_weight, **cfg)
 
     elif name == "balanced_softmax":
