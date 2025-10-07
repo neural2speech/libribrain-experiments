@@ -3,7 +3,7 @@ import random
 from pnpl.datasets import LibriBrainPhoneme, LibriBrainSpeech
 from pnpl.datasets import LibriBrainCompetitionHoldout
 from libribrain_experiments.datasets.prediction_smoother import PredictionSmootherDataset
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader, ConcatDataset, Subset
 from pnpl.datasets.grouped_dataset import GroupedDataset
 import json
 import os
@@ -26,6 +26,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
 import json
 import numpy as np
+
 
 
 
@@ -446,7 +447,19 @@ def get_dataset_partition_from_config(partition_config, channel_means=None, chan
     return partition_dataset
 
 
-def get_datasets_from_config(data_config):
+def limit_dataset(ds, max_examples: int, seed: int = 42):
+    """Return a Subset with at most max_examples items, sampled once at init.
+    """
+    max_examples = int(max_examples)
+    if max_examples <= 0 or max_examples >= len(ds):
+        return ds
+    g = torch.Generator()
+    g.manual_seed(int(seed))
+    idx = torch.randperm(len(ds), generator=g)[:max_examples].tolist()
+    return Subset(ds, idx)
+
+
+def get_datasets_from_config(data_config, seed=42):
     datasets_config = data_config["datasets"]
 
     if "train" in datasets_config:
@@ -457,6 +470,11 @@ def get_datasets_from_config(data_config):
         train_labels_sorted = train_dataset.datasets[0].labels_sorted
         train_dataset = apply_dataset_wrappers_from_data_config(
             train_dataset, data_config, "train")
+        # Optional: cap the number of training examples
+        train_limit = data_config.get("general", {}).get("train_limit", None)
+        if train_limit is not None:
+            seed = data_config.get("general", {}).get("train_limit_seed", seed)
+            train_dataset = limit_dataset(train_dataset, train_limit, seed=seed)
     else:
         train_dataset = None
         train_labels_sorted = None

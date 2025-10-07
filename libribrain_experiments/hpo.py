@@ -108,13 +108,15 @@ def main(args):
         wandb.define_metric("val_f1_macro", summary="max")
         wandb.define_metric("val_bal_acc", summary="max")
 
-    lightning.seed_everything(config["general"]["seed"])
+    seed = config["general"]["seed"]
+    lightning.seed_everything(seed)
 
     print("SEEDED EVERYTHING in ", time.time() - start_time, " seconds")
     start_time = time.time()
 
     train_dataset, val_dataset, test_dataset, labels = get_datasets_from_config(
-        config["data"])
+        config["data"], seed
+    )
 
     print("LOADED DATASETS in ", time.time() - start_time, " seconds")
 
