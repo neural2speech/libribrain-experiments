@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
             "val_bal_acc",
             "val_rocauc_macro",
             "val_rocauc_micro",
-            "val_jaccard_index",
+            # "val_jaccard_index",
             "val_loss",
         ],
         help="Key to extract from each JSON file (default: %(default)s).",
