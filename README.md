@@ -87,6 +87,8 @@ python -m "libribrain_experiments.make_submission" \
 \<CHECKPOINTS_PATH\>/final-speech-results/best-val_f1_macro-conformer-S-best-2025-07-28-hpo-0-epoch=16-val_f1_macro=0.8706.ckpt
 ```
 
+The final scores were obtained using only the 1st seed model.
+
 ## Phoneme Classification Model
 
 Training the models (seed 0 example):
@@ -118,7 +120,7 @@ python -m "libribrain_experiments.make_submission_phoneme" \
   \<CHECKPOINTS_PATH\>/final-results/best-val_f1_macro-conformer-custom-2025-09-09-*
 ```
 
-Here, we performed ensembling using 5 seeds.
+Here, we performed ensembling using the best 5 seeds.
 
 ## Trained Checkpoints
 
