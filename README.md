@@ -1,8 +1,15 @@
-# LibriBrain Experiments
+# LibriBrain Experiments: neural2speech Team
 
-This repository provides experimental setups and code accompanying the figures presented in the publication:
+> Fork of the official **LibriBrain Competition 2025** starter kit
+> Upstream: https://github.com/neural-processing-lab/libribrain-experiments
 
-> **LibriBrain: Over 50 Hours of Within-Subject MEG to Improve Speech Decoding Methods at Scale**
+This fork contains the exact code and checkpoints for the **neural2speech**
+team's submissions to both competition tracks:
+
+- [**Speech Detection (Standard)**](https://neural-processing-lab.github.io/2025-libribrain-competition/leaderboard/speech_detection_standard/)
+- [**Phoneme Classification (Standard)**](https://neural-processing-lab.github.io/2025-libribrain-competition/leaderboard/phoneme_classification_standard/)
+
+All commands below reproduce our submitted runs (training, test evaluation, and holdout CSV generation).
 
 ---
 ## Installation
@@ -46,3 +53,75 @@ python libribrain_experiments/hpo.py \
 Replace `<config-name>`, `<run-name>`, and `<run-id>` with your own values—`<config-name>` selects which experiment folder under `libribrain_experiments/phoneme/configs`, `<run-name>` is the Weights & Biases run name, and `<run-id>` is the hyperparameter/seed configuration index.
 
 ---
+
+## Speech Detection Model
+
+Training the models:
+
+```bash
+python -m "libribrain_experiments.hpo" \
+    --config="configs/speech/conformer/base-config-best-2025-07-28.yaml" \
+    --search-space="configs/speech/conformer/search-space-S.yaml" \
+    --run-name="conformer-S-best-2025-07-28" \
+    --run-index="0"
+```
+
+Evaluating the model on the test set:
+
+```bash
+python -m "libribrain_experiments.make_submission" \
+  --split "test" \
+  --tmax 2.5 \
+  --min_speech_len 100 \
+\<CHECKPOINTS_PATH\>/final-speech-results/best-val_f1_macro-conformer-S-best-2025-07-28-hpo-0-epoch=16-val_f1_macro=0.8706.ckpt
+```
+
+Generating holdout submission file:
+
+```bash
+python -m "libribrain_experiments.make_submission" \
+  --split "holdout" \
+  --tmax 2.5 \
+  --min_speech_len 100 \
+  --output submission-speech.csv \
+\<CHECKPOINTS_PATH\>/final-speech-results/best-val_f1_macro-conformer-S-best-2025-07-28-hpo-0-epoch=16-val_f1_macro=0.8706.ckpt
+```
+
+## Phoneme Classification Model
+
+Training the models (seed 0 example):
+
+```bash
+python -m "libribrain_experiments.hpo" \
+    --config="configs/phoneme/conformer/conformer-custom-2025-09-09-config.yaml" \
+    --search-space="configs/phoneme/conformer/search-space.yaml" \
+    --run-name="conformer-custom-2025-09-09" \
+    --run-index="0"
+```
+
+Evaluating the models on the test set:
+
+```bash
+python -m "libribrain_experiments.make_submission_phoneme" \
+  --split "test" --mimic_holdout_style \
+  --ensemble "majority_vote" \
+  -- \<CHECKPOINTS_PATH\>/final-results/best-val_f1_macro-conformer-custom-2025-09-09-*
+```
+
+Generating holdout submission file:
+
+```bash
+python -m "libribrain_experiments.make_submission_phoneme" \
+  --split "holdout" \
+  --ensemble "majority_vote" \
+  --output "submission-phoneme.csv" \
+  \<CHECKPOINTS_PATH\>/final-results/best-val_f1_macro-conformer-custom-2025-09-09-*
+```
+
+Here, we performed ensembling using 5 seeds.
+
+## Trained Checkpoints
+
+The checkpoints used to generate the scores are available here:
+
+https://aholab.ehu.eus/~xzuazo/libribrain/
