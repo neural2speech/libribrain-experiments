@@ -1,15 +1,44 @@
-# LibriBrain Experiments: neural2speech Team
+# MEGConformer — Official Code for the LibriBrain 2025 Submission
+
+[![arXiv - Paper](https://img.shields.io/badge/cs.CL-2512.01443-b31b1b?&logo=arxiv&logoColor=red)](https://arxiv.org/abs/2512.01443)
+[![Slides](https://img.shields.io/badge/Slides-Drive-yellow.svg)](https://docs.google.com/presentation/d/1RvMWcotexnKuJF75gEl4Ze2JZVsiEOkuTJNHOjiCcKI/edit?usp=sharing)
+[![Team](https://img.shields.io/badge/Team-%23neural2speech-green.svg)](https://www.isca-archive.org/iberspeech_2024/dezuazo24b_iberspeech.html)
+[![License](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](https://opensource.org/license/bsd-3-clause)
+[![HiTZ](https://img.shields.io/badge/HiTZ-Basque%20Center%20for%20Language%20Technology-blueviolet)](http://www.hitz.eus/)
+
+**#neural2speech Team — UPV/EHU, [HiTZ Center](https://www.hitz.eus/) & [Basque Center on Cognition, Brain and Language (BCBL)](https://www.bcbl.eu/en)**
 
 > Fork of the official **LibriBrain Competition 2025** starter kit
 > Upstream: https://github.com/neural-processing-lab/libribrain-experiments
 
-This fork contains the exact code and checkpoints for the **neural2speech**
-team's submissions to both competition tracks:
+This repository contains the exact code, configurations, and checkpoints used in our paper:
+
+* [**MEGConformer: Conformer-Based MEG Decoder for Robust Speech and Phoneme Classification**](https://arxiv.org/abs/2512.01443)
+(See citation [below](#citation))
+
+It reproduces our Standard Track submissions for both LibriBrain 2025 tasks:
 
 - [**Speech Detection (Standard)**](https://neural-processing-lab.github.io/2025-libribrain-competition/leaderboard/speech_detection_standard/)
 - [**Phoneme Classification (Standard)**](https://neural-processing-lab.github.io/2025-libribrain-competition/leaderboard/phoneme_classification_standard/)
 
 All commands below reproduce our submitted runs (training, test evaluation, and holdout CSV generation).
+
+## Short Description
+
+This work adapts a compact Conformer encoder to non-invasive MEG signals for two foundational tasks:
+
+* **Speech Detection:** speech vs. silence
+* **Phoneme Classification:** 39-way perceptual phoneme decoding
+
+Key contributions include:
+
+* A **unified [Conformer architecture](https://arxiv.org/abs/2005.08100)** for both tasks
+* A simple but highly effective **instance-level normalization** to mitigate distribution shifts
+* **MEGAugment:** A MEG-oriented [SpecAugment](https://arxiv.org/abs/1904.08779) variant for speech detection
+* A **dynamic grouping** loader and **inverse √ class weighting** for phoneme decoding
+* Competitive leaderboard results: **88.9% (Speech)**, **65.8% (Phonemes)** (both surpassing baselines)
+
+Checkpoints and training scripts in this repo allow full reproduction of our results.
 
 ---
 ## Installation
@@ -127,3 +156,19 @@ Here, we performed ensembling using the best 5 seeds.
 The checkpoints used to generate the scores are available here:
 
 https://aholab.ehu.eus/~xzuazo/libribrain/
+
+## Citation
+
+If you use this code or build on MEGConformer, please cite:
+
+```
+@misc{dezuazo2025megconformerconformerbasedmegdecoder,
+      title={MEGConformer: Conformer-Based MEG Decoder for Robust Speech and Phoneme Classification}, 
+      author={Xabier de Zuazo and Ibon Saratxaga and Eva Navas},
+      year={2025},
+      eprint={2512.01443},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2512.01443}, 
+}
+```
