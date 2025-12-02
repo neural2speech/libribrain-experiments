@@ -155,7 +155,12 @@ Here, we performed ensembling using the best 5 seeds.
 
 The checkpoints used to generate the scores are available here:
 
-https://aholab.ehu.eus/~xzuazo/libribrain/
+* https://aholab.ehu.eus/~xzuazo/libribrain/
+
+They are also available in 🤗 Hugging Face:
+
+* [`zuazo/megconformer-speech-detection`](https://huggingface.co/zuazo/megconformer-speech-detection)
+* [`zuazo/megconformer-phoneme-classification`](https://huggingface.co/zuazo/megconformer-phoneme-classification)
 
 ## Citation
 
