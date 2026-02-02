@@ -351,7 +351,6 @@ class ConformerSpeech(nn.Module):
         self.classifier = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
-        # NEW: normalize raw sensors
         x = self.pre_norm(x)
         x = self.pre_dropout(x)
 

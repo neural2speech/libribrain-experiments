@@ -9,6 +9,7 @@ import json
 import os
 import torch
 import wandb
+import warnings
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.callbacks import Callback
@@ -24,10 +25,11 @@ import numpy as np
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.callbacks import LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
+import re
 import json
 import numpy as np
-
-
+import math
+from scipy.signal import butter, sosfiltfilt
 
 
 # These are the sensors we identified as being particularly useful
@@ -133,7 +135,7 @@ class MEGAugmentDataset(torch.utils.data.Dataset):
     Thin wrapper that runs MEGAugment per sample.
 
     - Keeps labels / attrs intact
-    - Should be applied to train split only
+    - Should be applied to *train* split only
     """
     def __init__(self, base_dataset, augment_cfg: dict):
         super().__init__()
@@ -154,12 +156,288 @@ class MEGAugmentDataset(torch.utils.data.Dataset):
         return x, y
 
 
+class BandpassOnlyDataset(torch.utils.data.Dataset):
+    """
+    Deterministically keep ONLY a target frequency band for each sample.
+    Good for ablations (delta/theta/alpha/beta). Uses zero-phase IIR (filtfilt).
+    If SciPy isn't available, falls back to a windowed-sinc FIR on CPU.
+
+    band: [low_hz, high_hz]
+    fs: sampling rate (e.g., 250)
+    order: IIR order (even), default 4
+    taper: optional cosine taper (Hz) to soften band edges (only in FIR path)
+    """
+
+    def __init__(self, base_dataset, band: list[float], fs: float = 250, order: int = 4, taper: float | None = None):
+        super().__init__()
+        self.base = base_dataset
+        self.band = [float(band[0]), float(band[1])]
+        self.fs = float(fs)
+        self.order = int(order)
+        self.taper = float(taper) if taper is not None else None
+
+        # Relay bookkeeping attributes
+        for attr in ("labels_sorted", "channel_means", "channel_stds"):
+            if hasattr(base_dataset, attr):
+                setattr(self, attr, getattr(base_dataset, attr))
+
+            # IIR Butterworth in SOS, zero-phase
+            nyq = 0.5 * self.fs
+            lo = max(1e-6, self.band[0]) / nyq
+            hi = min(nyq - 1e-6, self.band[1]) / nyq
+            self.sos = butter(self.order, [lo, hi], btype="bandpass", output="sos")
+
+    def __len__(self):
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        item = self.base[idx]
+        # Accept (x, y) or (x, y, *extras)
+        if isinstance(item, (tuple, list)) and len(item) >= 2:
+            x, y = item[0], item[1]
+        else:
+            raise TypeError(
+                f"[BandpassOnlyDataset] Expected (x,y) or (x,y,...) from base dataset, "
+                f"got type={type(item)} at idx={idx}: {repr(item)[:120]}"
+            )
+        if y is None:
+            raise ValueError(f"[BandpassOnlyDataset] Label is None at idx={idx}")
+
+        x = torch.as_tensor(x).float()  # (C, T)
+        if x.dim() != 2:
+            raise ValueError(f"[BandpassOnlyDataset] Expected x as (C,T), got shape {tuple(x.shape)} at idx={idx}")
+
+        x_np = x.cpu().numpy()
+        # sosfiltfilt can fail if signal too short for the filter/padlen.
+        # We keep the order low and guard with try/except to surface a clear error.
+        try:
+            for c in range(x_np.shape[0]):
+                x_np[c] = sosfiltfilt(self.sos, x_np[c])
+        except Exception as e:
+            raise RuntimeError(f"[BandpassOnlyDataset] sosfiltfilt failed at idx={idx}: {e}")
+        x = torch.from_numpy(x_np).to(dtype=torch.float32)
+
+        # Ensure contiguous tensors for DataLoader collation
+        return x.contiguous(), torch.as_tensor(y).long().contiguous()
+
+    @staticmethod
+    def _design_fir(lo_hz: float, hi_hz: float, fs: float) -> torch.Tensor:
+        """Windowed-sinc band-pass FIR (Kaiser)."""
+        # Heuristic length: longer for lower cutoffs
+        width_hz = max(1.0, (hi_hz - lo_hz))
+        K = int(max(101, 4 * math.ceil(fs / max(1.0, width_hz))))  # odd length
+        if K % 2 == 0:
+            K += 1
+        n = torch.arange(K, dtype=torch.float64)
+        m = n - (K - 1) / 2.0
+        # Ideal band-pass = hi low-pass - lo low-pass
+        def _sinc_lp(fc):
+            x = m * (2 * math.pi * fc / fs)
+            y = torch.empty_like(x)
+            y[x == 0] = 2 * fc / fs
+            y[x != 0] = torch.sin(x[x != 0]) / math.pi / m[x != 0]
+            return y
+        h = _sinc_lp(hi_hz) - _sinc_lp(lo_hz)
+
+        # Kaiser window (beta≈5.65 ~ 60 dB)
+        beta = 5.65
+        # Approximation to I0 for Kaiser
+        def _i0(z):
+            t = z / 2.0
+            s = torch.ones_like(t)
+            term = torch.ones_like(t)
+            for k in range(1, 20):
+                term = term * (t * t) / (k * k)
+                s = s + term
+            return s
+        w = _i0(beta * torch.sqrt(1 - ((2*m)/(K-1))**2)) / _i0(torch.tensor(beta))
+        h = h * w
+
+        # L2 normalize to ~unity passband gain
+        h = h / h.sum().clamp_min(1e-12)
+        return h.to(dtype=torch.float32)
+
+
+def _normalize_arpabet(name: str) -> str:
+    """
+    Canonicalize phoneme symbol:
+    - uppercase
+    - strip trailing stress digit (AA0 -> AA)
+    - strip spaces
+    """
+    s = str(name).strip().replace(" ", "").upper()
+    s = re.sub(r"\d$", "", s)  # remove final stress digit if present
+    return s
+
+
+def _norm_set(strings):
+    return {_normalize_arpabet(s) for s in strings}
+
+
+# ARPAbet sets we’ll use (strings must match dataset.labels_sorted)
+VOWELS      = {"AA","AE","AH","AO","AW","AY","EH","ER","EY","IH","IY","OW","OY","UH","UW"}
+
+# Manner of articulation
+PLOSIVES    = {"P","B","T","D","K","G"}
+FRICATIVES  = {"F","V","TH","DH","S","Z","SH","ZH","HH"}
+AFFRICATES  = {"CH","JH"}
+NASALS      = {"M","N","NG"}
+LIQUIDS     = {"L","R"}
+GLIDES      = {"W","Y"}
+
+# Voicing split: everything except these is voiced
+VOICELESS   = {"P","T","K","F","TH","S","SH","CH","HH"}
+
+# Places of articulation (consonants)
+BILABIAL       = {"P","B","M"}
+LABIODENTAL    = {"F","V"}
+DENTAL         = {"TH","DH"}
+ALVEOLAR       = {"T","D","S","Z","N","L","R"}   # ARPABET R ~ /ɹ/
+POSTALVEOLAR   = {"SH","ZH","CH","JH"}
+PALATAL        = {"Y"}                           # ARPABET Y ~ /j/
+LABIAL_VELAR   = {"W"}
+VELAR          = {"K","G","NG"}
+GLOTTAL        = {"HH"}
+
+# Diphthong decomposition used for blending vowel features
+DIPHTH_MAP = {
+    "AY": ["AA","IH"],
+    "AW": ["AA","UH"],
+    "EY": ["EH","IH"],
+    "OW": ["AO","UH"],
+    "OY": ["AO","IH"],
+}
+
+# Vowel feature memberships (monophthongs only)
+V_HEIGHT_CLOSE        = {"IY","UW"}
+V_HEIGHT_NEAR_CLOSE   = {"IH","UH"}
+V_HEIGHT_CLOSE_MID    = set()            # none among ARPAbet monophthongs
+V_HEIGHT_MID          = set()            # none among ARPAbet monophthongs
+V_HEIGHT_OPEN_MID     = {"EH","ER","AO","AH"}
+V_HEIGHT_NEAR_OPEN    = {"AE"}
+V_HEIGHT_OPEN         = {"AA"}
+
+V_BACK_FRONT          = {"IY","EH","AE"}
+V_BACK_NEAR_FRONT     = {"IH"}
+V_BACK_CENTRAL        = {"ER"}
+V_BACK_NEAR_BACK      = {"UH"}
+V_BACK_BACK           = {"AA","AO","UW","AH"}
+
+V_ROUNDED             = {"AO","UH","UW"}
+
+def blend_diphthongs(positives: set[str]) -> set[str]:
+    """Return positives ∪ {diphthongs whose ANY component is positive}."""
+    out = set(positives)
+    for diph, comps in DIPHTH_MAP.items():
+        if any(c in positives for c in comps):
+            out.add(diph)
+    return out
+
+# A dictionary of feature “positives”. Anything not in the positive set is 0.
+FEATURE_POSITIVE_SETS = {
+    # Manner of articulation
+    "voicing":   {"pos": (VOWELS | PLOSIVES | FRICATIVES | AFFRICATES | NASALS | LIQUIDS | GLIDES) - VOICELESS},
+    "plosive":   {"pos": PLOSIVES},
+    "fricative": {"pos": FRICATIVES},
+    "affricate": {"pos": AFFRICATES},
+    "nasal":     {"pos": NASALS},
+    "liquid":    {"pos": LIQUIDS},
+    "glide":     {"pos": GLIDES},
+    # Places of articulation
+    "bilabial":       {"pos": BILABIAL},
+    "labiodental":    {"pos": LABIODENTAL},
+    "dental":         {"pos": DENTAL},
+    "alveolar":       {"pos": ALVEOLAR},
+    "postalveolar":   {"pos": POSTALVEOLAR},
+    "palatal":        {"pos": PALATAL},
+    "labial_velar":   {"pos": LABIAL_VELAR},
+    "velar":          {"pos": VELAR},
+    "glottal":        {"pos": GLOTTAL},
+    # Vowel features (monophthongs + blended diphthongs)
+    "vowel_height_close":       {"pos": blend_diphthongs(V_HEIGHT_CLOSE)},
+    "vowel_height_near_close":  {"pos": blend_diphthongs(V_HEIGHT_NEAR_CLOSE)},
+    "vowel_height_close_mid":   {"pos": blend_diphthongs(V_HEIGHT_CLOSE_MID)},
+    "vowel_height_mid":         {"pos": blend_diphthongs(V_HEIGHT_MID)},
+    "vowel_height_open_mid":    {"pos": blend_diphthongs(V_HEIGHT_OPEN_MID)},
+    "vowel_height_near_open":   {"pos": blend_diphthongs(V_HEIGHT_NEAR_OPEN)},
+    "vowel_height_open":        {"pos": blend_diphthongs(V_HEIGHT_OPEN)},
+    "vowel_backness_front":         {"pos": blend_diphthongs(V_BACK_FRONT)},
+    "vowel_backness_near_front":    {"pos": blend_diphthongs(V_BACK_NEAR_FRONT)},
+    "vowel_backness_central":       {"pos": blend_diphthongs(V_BACK_CENTRAL)},
+    "vowel_backness_near_back":     {"pos": blend_diphthongs(V_BACK_NEAR_BACK)},
+    "vowel_backness_back":          {"pos": blend_diphthongs(V_BACK_BACK)},
+    "vowel_rounded":                {"pos": blend_diphthongs(V_ROUNDED)},
+}
+
+# Precompute normalized feature sets
+FEATURE_POSITIVE_SETS_NORM = {
+    k: {"pos": _norm_set(v["pos"])} for k, v in FEATURE_POSITIVE_SETS.items()
+}
+
+
+class LibriBrainPhonemeFeature(torch.utils.data.Dataset):
+    """
+    Wrap LibriBrainPhoneme and remap its 39-way label to a binary feature target.
+    feature: one of FEATURE_POSITIVE_SETS keys (e.g., 'voicing', 'fricative', 'plosive', ...)
+    """
+    def __init__(self, feature: str, **kwargs):
+        super().__init__()
+        if feature not in FEATURE_POSITIVE_SETS:
+            raise ValueError(f"Unknown feature '{feature}'. Available: {list(FEATURE_POSITIVE_SETS.keys())}")
+        self.feature = feature
+        self.base = LibriBrainPhoneme(**kwargs)
+
+        # bookkeeping for the rest of the pipeline
+        self.labels_sorted = [0, 1]  # binary task
+        self.channel_means = getattr(self.base, "channel_means", None)
+        self.channel_stds  = getattr(self.base, "channel_stds",  None)
+
+        # build name->id map for safety
+        if not hasattr(self.base, "labels_sorted"):
+            raise ValueError("LibriBrainPhoneme must expose labels_sorted with ARPAbet names.")
+        self._id2name_raw = list(self.base.labels_sorted)
+        self._id2name_norm = [_normalize_arpabet(n) for n in self._id2name_raw]
+        self._name2id_norm = {n: i for i, n in enumerate(self._id2name_norm)}
+
+        # validate using normalized sets
+        all_positives = set().union(*[v["pos"] for v in FEATURE_POSITIVE_SETS_NORM.values()])
+        unknown = all_positives - set(self._id2name_norm)
+        if unknown:
+            warnings.warn(f"[LibriBrainPhonemeFeature] Unknown labels in feature sets (ignored): {sorted(unknown)}")
+
+        # use normalized positives for the requested feature, filtered to what exists
+        self._positives_norm = {
+            p for p in FEATURE_POSITIVE_SETS_NORM[self.feature]["pos"]
+            if p in self._name2id_norm
+        }
+
+        # Sanity check info
+        present = len(all_positives & set(self._id2name_norm))
+        total   = len(all_positives)
+        print(f"[LibriBrainPhonemeFeature] Matched {present}/{total} feature labels to dataset inventory.")
+
+
+    def __len__(self):
+        ell_positives = set().union(*[v["pos"] for v in FEATURE_POSITIVE_SETS_NORM.values()])
+        return len(self.base)
+
+    def __getitem__(self, idx):
+        x, y = self.base[idx]  # y is index into 39-way classes
+        # map y -> name -> binary
+        name_norm = self._id2name_norm[int(y)]
+        target = 1 if name_norm in self._positives_norm else 0
+        return x, torch.tensor(target, dtype=torch.long)
+
+
+
 DATASETS = {
     "libribrain_phoneme": LibriBrainPhoneme,
     "libribrain_speech": LibriBrainSpeechWithLabels,
     "libribrain_speech_simplified": LibriBrainSpeechSimplified,
     "libribrain_speech_filtered": lambda **kw: FilteredDataset(LibriBrainSpeech(**kw)),
     "prediction_smoother": PredictionSmootherDataset,
+	"libribrain_phoneme_feature": LibriBrainPhonemeFeature,
+    "bandpass_only_wrapper": BandpassOnlyDataset,
 }
 
 
@@ -432,9 +710,12 @@ def get_dataset_partition_from_config(partition_config, channel_means=None, chan
                 f"Dataset {name} not supported. Please change data config")
         # Extract the MEG Agument config
         mega_cfg  = config.pop("meg_augment", None)
+        bp_cfg = config.pop("bandpass_only", None)
 
         dataset = DATASETS[name](**config)
 
+        if bp_cfg:
+            dataset = BandpassOnlyDataset(dataset, **bp_cfg)
         if mega_cfg:
             if isinstance(mega_cfg, bool):
                 mega_cfg = {}  # all defaults
@@ -925,26 +1206,6 @@ def run_validation(val_loader, module, labels, avg_evals=None, samples_per_class
     return result, all_targets.cpu().numpy(), all_preds.cpu().numpy(), all_logits.cpu().numpy()
 
 
-# def adapt_config_to_data(config, train_loader, labels):
-#     n_classes = len(labels)
-#     class_weights = None
-#     if ("loss" in config and "config" in config["loss"] and "weight" in config["loss"]["config"]):
-#         if (config["loss"]["config"]["weight"] == "auto"):
-#             if (class_weights is None):
-#                 class_weights = get_label_distribution(train_loader, n_classes)
-#             inverse_class_freq = 1 / class_weights
-#             config["loss"]["config"]["weight"] = inverse_class_freq
-# 
-#     if "grouped_samples" in config["data"]["general"]:
-#         for layer in config["model"]:
-#             layer_name = list(layer.keys())[0]
-#             layer_dict = layer[layer_name]
-#             if (layer_dict is None):
-#                 continue
-#             if ("n_groups" in layer_dict and layer_dict["n_groups"] == "auto"):
-#                 layer_dict["n_groups"] = config["data"]["general"]["grouped_samples"]
-
-
 def _normalize_weights(w: torch.Tensor) -> torch.Tensor:
     w = w.float()
     return w / w.mean().clamp_min(1e-12)
@@ -1004,6 +1265,38 @@ def adapt_config_to_data(config, train_data_or_loader, labels):
 
             # store as list to survive hparams saving
             config["loss"]["config"]["weight"] = w.tolist()
+
+    # Applies when using single-logit BCE-like losses (your bce_with_smoothing)
+    if config.get("loss", {}).get("name", "") in ("bce_with_smoothing", "bce_with_logits", "bce"):
+        if "pos_weight" in config["loss"]["config"]:
+            pw_mode = config["loss"]["config"]["pos_weight"]
+            if isinstance(pw_mode, str) and pw_mode.startswith("auto"):
+                if counts.numel() != 2:
+                    raise ValueError("Auto pos_weight requires exactly 2 classes (binary).")
+                neg = counts[0].float().clamp_min(1)
+                pos = counts[1].float().clamp_min(1)
+
+                # base ratio for BCE: weight positives by N_neg / N_pos
+                if pw_mode in ("auto", "auto_ratio", "auto_inv"):
+                    pw = neg / pos
+                elif pw_mode in ("auto_inv_sqrt", "auto_sqrt"):
+                    pw = torch.sqrt(neg / pos)
+                elif pw_mode == "auto_pow":
+                    alpha = float(config["loss"]["config"].get("alpha", 0.5))
+                    pw = (neg ** alpha) / (pos ** alpha)
+                elif pw_mode == "auto_log":
+                    k = float(config["loss"]["config"].get("log_k", 1.0))
+                    pw = torch.log(k + neg) / torch.log(k + pos)
+                else:
+                    raise ValueError(f"Unknown pos_weight mode: {pw_mode}")
+
+                # optional clamp only (do NOT normalize pos_weight)
+                max_w = float(config["loss"]["config"].get("max_weight", 0.0))
+                if max_w and max_w > 0:
+                    pw = torch.clamp(pw, max=max_w)
+
+                # store as scalar float (what PyTorch expects for BCE pos_weight)
+                config["loss"]["config"]["pos_weight"] = float(pw.item())
 
     # Auto n_groups kept as-is
     if "grouped_samples" in config["data"]["general"]:
